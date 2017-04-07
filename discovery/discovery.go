@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery/azure"
+	"github.com/prometheus/prometheus/discovery/azuresf"
 	"github.com/prometheus/prometheus/discovery/consul"
 	"github.com/prometheus/prometheus/discovery/dns"
 	"github.com/prometheus/prometheus/discovery/ec2"
@@ -127,6 +128,9 @@ func ProvidersFromConfig(cfg config.ServiceDiscoveryConfig, logger log.Logger) m
 	}
 	if len(cfg.StaticConfigs) > 0 {
 		app("static", 0, NewStaticProvider(cfg.StaticConfigs))
+	}
+	for i, c := range cfg.AzureServiceFabricSDConfigs {
+		app("azuresf", i, azuresf.NewDiscovery(c))
 	}
 
 	return providers
