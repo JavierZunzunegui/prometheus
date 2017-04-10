@@ -182,7 +182,7 @@ var (
 
 	// DefaultAzureServiceFabricSDConfig is the default Azure Service Fabric SD configuration.
 	DefaultAzureServiceFabricSDConfig = AzureServiceFabricSDConfig{
-		Port:            80,
+		Endpoints: map[string]struct{}{"debug":struct{}{}},
 		RefreshInterval: model.Duration(5 * time.Minute),
 	}
 )
@@ -1446,8 +1446,8 @@ func (c *RemoteReadConfig) UnmarshalYAML(unmarshal func(interface{}) error) erro
 
 // AzureServiceFabricSDConfig is the configuration for Azure Service Fabric service discovery.
 type AzureServiceFabricSDConfig struct {
-	Port            int            `yaml:"port"`
 	ClusterURL      string         `yaml:"cluster_url"`
+	Endpoints map[string]struct{} `yaml:"endpoints"`
 	RefreshInterval model.Duration `yaml:"refresh_interval,omitempty"`
 
 	// Catches all undefined fields and must be empty after parsing.

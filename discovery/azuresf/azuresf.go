@@ -101,7 +101,7 @@ func (d *Discovery) refresh() (tg *config.TargetGroup, err error) {
 		return nil, err
 	}
 
-	targets := makeTargets(applicationEntries)
+	targets := d.makeTargets(applicationEntries)
 
 	log.Debugf("Azure Service Fabric discovery completed.")
 
@@ -227,7 +227,7 @@ func getPartitionsEntries(client *sfClient, application, service string) ([]part
 	return partitionEntries, nil
 }
 
-func makeTargets(applicationEntries []applicationEntry) []model.LabelSet {
+func (d *Discovery) makeTargets(applicationEntries []applicationEntry) []model.LabelSet {
 	// TODO - any clever way to pre-calculate the size of this slice?
 	targets := make([]model.LabelSet, 0)
 
@@ -235,18 +235,25 @@ func makeTargets(applicationEntries []applicationEntry) []model.LabelSet {
 		for _, serviceEntry := range applicationEntry.serviceEntries {
 			for _, partitionEntry := range serviceEntry.partitionsEntries {
 				for _, nodeEndpoints := range partitionEntry.nodeEndpoints {
-					labels := model.LabelSet{
-						azureSFLabelApplication: model.LabelValue(applicationEntry.application),
-						azureSFLabelService:     model.LabelValue(serviceEntry.service),
-						azureSFLabelPartition:   model.LabelValue(partitionEntry.partition),
-						azureSFLabelNode:        model.LabelValue(nodeEndpoints.node),
-					}
-
 					for endpointName, endpointValue := range nodeEndpoints.endpoints {
-						labels[azureSFLabelEndpoint+model.LabelName(endpointName)] = model.LabelValue(endpointValue)
-					}
+						if _, ok := d.cfg.Endpoints[endpointName]; !ok {
+							// endpoint is not to be scrapped
+							continue
+						}
 
-					targets = append(targets, labels)
+						targets = append(targets, model.LabelSet{
+							azureSFLabelApplication: model.LabelValue(applicationEntry.application),
+							azureSFLabelService:     model.LabelValue(serviceEntry.service),
+							azureSFLabelPartition:   model.LabelValue(partitionEntry.partition),
+							azureSFLabelNode:        model.LabelValue(nodeEndpoints.node),
+
+							// the default scrape target, __address__
+							model.AddressLabel: model.LabelValue(endpointValue),
+
+							// captures de endpoint name, so relabel_configs may filter if appropriate
+							azureSFLabelEndpoint + model.LabelName(endpointName): model.LabelValue(endpointValue),
+						})
+					}
 				}
 			}
 		}
