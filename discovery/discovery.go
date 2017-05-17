@@ -130,7 +130,12 @@ func ProvidersFromConfig(cfg config.ServiceDiscoveryConfig, logger log.Logger) m
 		app("static", 0, NewStaticProvider(cfg.StaticConfigs))
 	}
 	for i, c := range cfg.AzureServiceFabricSDConfigs {
-		app("azuresf", i, azuresf.NewDiscovery(c))
+		sf, err := azuresf.NewDiscovery(c)
+		if err != nil {
+			log.Errorf("Cannot create Azure Service Fabric discovery: %s", err)
+			continue
+		}
+		app("azuresf", i, sf)
 	}
 
 	return providers

@@ -182,8 +182,8 @@ var (
 
 	// DefaultAzureServiceFabricSDConfig is the default Azure Service Fabric SD configuration.
 	DefaultAzureServiceFabricSDConfig = AzureServiceFabricSDConfig{
-		Endpoints: map[string]struct{}{"debug":struct{}{}},
-		RefreshInterval: model.Duration(5 * time.Minute),
+		Endpoints:       map[string]struct{}{},
+		RefreshInterval: model.Duration(time.Minute),
 	}
 )
 
@@ -1446,12 +1446,13 @@ func (c *RemoteReadConfig) UnmarshalYAML(unmarshal func(interface{}) error) erro
 
 // AzureServiceFabricSDConfig is the configuration for Azure Service Fabric service discovery.
 type AzureServiceFabricSDConfig struct {
-	ClusterURL      string         `yaml:"cluster_url"`
-	Endpoints map[string]struct{} `yaml:"endpoints"`
-	RefreshInterval model.Duration `yaml:"refresh_interval,omitempty"`
+	ClusterURL           string              `yaml:"cluster_url"`
+	Endpoints            map[string]struct{} `yaml:"endpoints"`
+	RefreshInterval      model.Duration      `yaml:"refresh_interval,omitempty"`
+	ClientCertAndKeyFile string              `yaml:"client_cert_and_key_file"` // populate only for secure clusters. Comma separated
+	TlsSkipVerify        bool                `yaml:"tls_skip_verify"`
 
-	// Catches all undefined fields and must be empty after parsing.
-	XXX map[string]interface{} `yaml:",inline"`
+	XXX map[string]interface{} `yaml:",inline"` // Catches all undefined fields and must be empty after parsing.
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface.

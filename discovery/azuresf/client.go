@@ -8,7 +8,9 @@ import (
 )
 
 type sfClient struct {
+	protocol   string // http / https
 	clusterURL string
+	client     *http.Client
 }
 
 type getApplicationsResponse struct {
@@ -18,7 +20,7 @@ type getApplicationsResponse struct {
 }
 
 func (c *sfClient) getApplications() ([]string, error) {
-	resp, err := http.Get(fmt.Sprintf("http://%s/Applications/?api-version=2.0", c.clusterURL))
+	resp, err := c.client.Get(fmt.Sprintf("%s://%s/Applications/?api-version=2.0", c.protocol, c.clusterURL))
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +50,7 @@ type getServicesResponse struct {
 }
 
 func (c *sfClient) getServices(application string) ([]string, error) {
-	resp, err := http.Get(fmt.Sprintf("http://%s/Applications/%s/$/GetServices?api-version=2.0", c.clusterURL, application))
+	resp, err := c.client.Get(fmt.Sprintf("%s://%s/Applications/%s/$/GetServices?api-version=2.0", c.protocol, c.clusterURL, application))
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +82,7 @@ type getPartitionsResponse struct {
 }
 
 func (c *sfClient) getPartitions(application, service string) ([]string, error) {
-	resp, err := http.Get(fmt.Sprintf("http://%s/Applications/%s/$/GetServices/%s/$/GetPartitions?api-version=2.0", c.clusterURL, application, url.QueryEscape(service)))
+	resp, err := c.client.Get(fmt.Sprintf("%s://%s/Applications/%s/$/GetServices/%s/$/GetPartitions?api-version=2.0", c.protocol, c.clusterURL, application, url.QueryEscape(service)))
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +122,7 @@ type nodeAndEndpoints struct {
 }
 
 func (c *sfClient) getReplicaEndpoints(application, service, partition string) ([]nodeAndEndpoints, error) {
-	resp, err := http.Get(fmt.Sprintf("http://%s/Applications/%s/$/GetServices/%s/$/GetPartitions/%s/$/GetReplicas?api-version=2.0", c.clusterURL, application, url.QueryEscape(service), partition))
+	resp, err := c.client.Get(fmt.Sprintf("%s://%s/Applications/%s/$/GetServices/%s/$/GetPartitions/%s/$/GetReplicas?api-version=2.0", c.protocol, c.clusterURL, application, url.QueryEscape(service), partition))
 	if err != nil {
 		return nil, err
 	}

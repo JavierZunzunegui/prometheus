@@ -1,7 +1,11 @@
 package azuresf
 
 import (
+	"crypto/tls"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -24,7 +28,7 @@ const (
 var (
 	azureSFSDRefreshFailuresCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Name: "prometheus_sd_azure__sf_refresh_failures_total",
+			Name: "prometheus_sd_azure_sf_refresh_failures_total",
 			Help: "Number of Azure Service Fabric SD refresh failures.",
 		})
 	azureSFSDRefreshDuration = prometheus.NewSummary(
@@ -44,13 +48,50 @@ func init() {
 type Discovery struct {
 	cfg      *config.AzureServiceFabricSDConfig
 	interval time.Duration
+	sfClient *sfClient
 }
 
-func NewDiscovery(cfg *config.AzureServiceFabricSDConfig) *Discovery {
+func NewDiscovery(cfg *config.AzureServiceFabricSDConfig) (*Discovery, error) {
+	var sfc *sfClient
+
+	if cfg.ClientCertAndKeyFile == "" {
+		sfc = &sfClient{
+			clusterURL: cfg.ClusterURL,
+			protocol:   "http",
+			client:     http.DefaultClient,
+		}
+	} else {
+		fileNames := strings.Split(cfg.ClientCertAndKeyFile, ",")
+		if len(fileNames) != 2 {
+			return nil, errors.New("expecting 'certFile,keyFile', comma-separated")
+		}
+
+		cert, err := tls.LoadX509KeyPair(fileNames[0], fileNames[1])
+		if err != nil {
+			return nil, err
+		}
+
+		tlsConfig := &tls.Config{
+			Certificates:       []tls.Certificate{cert},
+			Renegotiation:      tls.RenegotiateOnceAsClient,
+			InsecureSkipVerify: true, // cfg.TlsSkipVerify,
+		}
+		tlsConfig.BuildNameToCertificate()
+
+		sfc = &sfClient{
+			clusterURL: cfg.ClusterURL,
+			protocol:   "https",
+			client: &http.Client{
+				Transport: &http.Transport{TLSClientConfig: tlsConfig},
+			},
+		}
+	}
+
 	return &Discovery{
 		cfg:      cfg,
 		interval: time.Duration(cfg.RefreshInterval),
-	}
+		sfClient: sfc,
+	}, nil
 }
 
 // Run implements the TargetProvider interface.
@@ -92,11 +133,7 @@ func (d *Discovery) refresh() (tg *config.TargetGroup, err error) {
 		}
 	}()
 
-	client := &sfClient{
-		clusterURL: d.cfg.ClusterURL,
-	}
-
-	applicationEntries, err := getApplicationEntries(client)
+	applicationEntries, err := getApplicationEntries(d.sfClient)
 	if err != nil {
 		return nil, err
 	}
