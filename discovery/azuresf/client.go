@@ -141,7 +141,7 @@ func (c *sfClient) getReplicaEndpoints(application, service, partition string) (
 	for _, item := range replicaResp.Items {
 		var endpoints getReplicaResponseEndpoints
 		if err := json.Unmarshal([]byte(item.Address), &endpoints); err != nil {
-			return nil, err
+			continue // there are other valid formats for endpoints. Ignore this endpoint and move on
 		}
 
 		nodeEndpoints = append(nodeEndpoints, nodeAndEndpoints{node: item.NodeName, endpoints: endpoints.Endpoints})
