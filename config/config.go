@@ -1446,7 +1446,7 @@ func (c *RemoteReadConfig) UnmarshalYAML(unmarshal func(interface{}) error) erro
 
 // AzureServiceFabricSDConfig is the configuration for Azure Service Fabric service discovery.
 type AzureServiceFabricSDConfig struct {
-	ClusterURL           string              `yaml:"cluster_url"`
+	ClusterHost          string              `yaml:"cluster_host"`
 	Endpoints            map[string]struct{} `yaml:"endpoints"`
 	RefreshInterval      model.Duration      `yaml:"refresh_interval,omitempty"`
 	ClientCertAndKeyFile string              `yaml:"client_cert_and_key_file"` // populate only for secure clusters. Comma separated

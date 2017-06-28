@@ -1,16 +1,24 @@
 package azuresf
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 )
 
+const (
+	apiVersion = "api-version=2.0"
+)
+
 type sfClient struct {
-	protocol   string // http / https
-	clusterURL string
-	client     *http.Client
+	origin string
+	client *http.Client
+}
+
+func httpNotOKError(method string, code int) error {
+	return fmt.Errorf("%s: expecting 200, got %d", method, code)
 }
 
 type getApplicationsResponse struct {
@@ -19,15 +27,22 @@ type getApplicationsResponse struct {
 	} `json:"Items"`
 }
 
-func (c *sfClient) getApplications() ([]string, error) {
-	resp, err := c.client.Get(fmt.Sprintf("%s://%s/Applications/?api-version=2.0", c.protocol, c.clusterURL))
+func (c *sfClient) getApplications(ctx context.Context) ([]string, error) {
+	url := fmt.Sprintf("%s/Applications/?"+apiVersion, c.origin)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.client.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("expecting 200, got %d", resp.StatusCode)
+		return nil, httpNotOKError("getApplications", resp.StatusCode)
 	}
 
 	var appResp getApplicationsResponse
@@ -49,15 +64,22 @@ type getServicesResponse struct {
 	} `json:"Items"`
 }
 
-func (c *sfClient) getServices(application string) ([]string, error) {
-	resp, err := c.client.Get(fmt.Sprintf("%s://%s/Applications/%s/$/GetServices?api-version=2.0", c.protocol, c.clusterURL, application))
+func (c *sfClient) getServices(ctx context.Context, application string) ([]string, error) {
+	url := fmt.Sprintf("%s/Applications/%s/$/GetServices?"+apiVersion, c.origin, application)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.client.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("expecting 200, got %d", resp.StatusCode)
+		return nil, httpNotOKError("getServices", resp.StatusCode)
 	}
 
 	var servicesResp getServicesResponse
@@ -81,15 +103,19 @@ type getPartitionsResponse struct {
 	} `json:"Items"`
 }
 
-func (c *sfClient) getPartitions(application, service string) ([]string, error) {
-	resp, err := c.client.Get(fmt.Sprintf("%s://%s/Applications/%s/$/GetServices/%s/$/GetPartitions?api-version=2.0", c.protocol, c.clusterURL, application, url.QueryEscape(service)))
+func (c *sfClient) getPartitions(ctx context.Context, application, service string) ([]string, error) {
+	url := fmt.Sprintf("%s/Applications/%s/$/GetServices/%s/$/GetPartitions?"+apiVersion, c.origin, application, url.QueryEscape(service))
+
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
+
+	resp, err := c.client.Do(req.WithContext(ctx))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("expecting 200, got %d", resp.StatusCode)
+		return nil, httpNotOKError("getPartitions", resp.StatusCode)
 	}
 
 	var partitionsResp getPartitionsResponse
@@ -121,15 +147,19 @@ type nodeAndEndpoints struct {
 	endpoints map[string]string
 }
 
-func (c *sfClient) getReplicaEndpoints(application, service, partition string) ([]nodeAndEndpoints, error) {
-	resp, err := c.client.Get(fmt.Sprintf("%s://%s/Applications/%s/$/GetServices/%s/$/GetPartitions/%s/$/GetReplicas?api-version=2.0", c.protocol, c.clusterURL, application, url.QueryEscape(service), partition))
+func (c *sfClient) getReplicaEndpoints(ctx context.Context, application, service, partition string) ([]nodeAndEndpoints, error) {
+	url := fmt.Sprintf("%s/Applications/%s/$/GetServices/%s/$/GetPartitions/%s/$/GetReplicas?"+apiVersion, c.origin, application, url.QueryEscape(service), partition)
+
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
+
+	resp, err := c.client.Do(req.WithContext(ctx))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("expecting 200, got %d", resp.StatusCode)
+		return nil, httpNotOKError("getReplicaEndpoints", resp.StatusCode)
 	}
 
 	var replicaResp getReplicaResponse
@@ -141,7 +171,9 @@ func (c *sfClient) getReplicaEndpoints(application, service, partition string) (
 	for _, item := range replicaResp.Items {
 		var endpoints getReplicaResponseEndpoints
 		if err := json.Unmarshal([]byte(item.Address), &endpoints); err != nil {
-			continue // there are other valid formats for endpoints. Ignore this endpoint and move on
+			// there are other valid formats for endpoints (such as containers). Ignore this endpoint and move on
+			// TODO - support additional formats
+			continue
 		}
 
 		nodeEndpoints = append(nodeEndpoints, nodeAndEndpoints{node: item.NodeName, endpoints: endpoints.Endpoints})

@@ -1,18 +1,18 @@
 package azuresf
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/model"
-	"golang.org/x/net/context"
-
 	"github.com/prometheus/prometheus/config"
 )
 
@@ -23,6 +23,8 @@ const (
 	azureSFLabelPartition   = azureSFLabel + "partition"
 	azureSFLabelNode        = azureSFLabel + "node"
 	azureSFLabelEndpoint    = azureSFLabel + "endpoint_"
+
+	refreshTimeout = time.Second * 15
 )
 
 var (
@@ -34,7 +36,7 @@ var (
 	azureSFSDRefreshDuration = prometheus.NewSummary(
 		prometheus.SummaryOpts{
 			Name: "prometheus_sd_azure_sf_refresh_duration_seconds",
-			Help: "The duration of a Azure Service Fabric SD refresh in seconds.",
+			Help: "The duration of Azure Service Fabric SD refresh in seconds.",
 		})
 )
 
@@ -56,9 +58,8 @@ func NewDiscovery(cfg *config.AzureServiceFabricSDConfig) (*Discovery, error) {
 
 	if cfg.ClientCertAndKeyFile == "" {
 		sfc = &sfClient{
-			clusterURL: cfg.ClusterURL,
-			protocol:   "http",
-			client:     http.DefaultClient,
+			origin: fmt.Sprintf("http://%s", cfg.ClusterHost),
+			client: http.DefaultClient,
 		}
 	} else {
 		fileNames := strings.Split(cfg.ClientCertAndKeyFile, ",")
@@ -79,8 +80,7 @@ func NewDiscovery(cfg *config.AzureServiceFabricSDConfig) (*Discovery, error) {
 		tlsConfig.BuildNameToCertificate()
 
 		sfc = &sfClient{
-			clusterURL: cfg.ClusterURL,
-			protocol:   "https",
+			origin: fmt.Sprintf("https://%s", cfg.ClusterHost),
 			client: &http.Client{
 				Transport: &http.Transport{TLSClientConfig: tlsConfig},
 			},
@@ -99,13 +99,14 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*config.TargetGroup) {
 	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+	select {
+	case <-ctx.Done():
+		// context is already closed, do not even perform one discovery
+		return
+	default:
+	}
 
+	for {
 		tg, err := d.refresh()
 		if err != nil {
 			log.Errorf("unable to refresh during Azure Sevice Fabric discovery: %s", err)
@@ -117,23 +118,27 @@ func (d *Discovery) Run(ctx context.Context, ch chan<- []*config.TargetGroup) {
 		}
 
 		select {
-		case <-ticker.C:
 		case <-ctx.Done():
 			return
+		case <-ticker.C:
 		}
+
 	}
 }
 
 func (d *Discovery) refresh() (tg *config.TargetGroup, err error) {
-	t0 := time.Now()
-	defer func() {
-		azureSFSDRefreshDuration.Observe(time.Since(t0).Seconds())
+	defer func(start time.Time) {
+		azureSFSDRefreshDuration.Observe(time.Since(start).Seconds())
 		if err != nil {
 			azureSFSDRefreshFailuresCount.Inc()
 		}
-	}()
+	}(time.Now())
 
-	applicationEntries, err := getApplicationEntries(d.sfClient)
+	// ctx with cancel after a given timeout
+	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+	defer cancel() // stops the timer
+
+	applicationEntries, err := getApplicationEntries(ctx, d.sfClient)
 	if err != nil {
 		return nil, err
 	}
@@ -153,30 +158,32 @@ type applicationEntry struct {
 	err            error
 }
 
-func getApplicationEntries(client *sfClient) ([]applicationEntry, error) {
-	applications, err := client.getApplications()
+func getApplicationEntries(ctx context.Context, client *sfClient) ([]applicationEntry, error) {
+	applications, err := client.getApplications(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get applications: %s", err)
 	}
 
-	entriesChan := make(chan applicationEntry, len(applications))
-	for _, application := range applications {
-		go func(application string) {
-			serviceEntries, err := getServiceEntries(client, application)
-			if err != nil {
-				entriesChan <- applicationEntry{err: err}
-			} else {
-				entriesChan <- applicationEntry{
-					application:    application,
-					serviceEntries: serviceEntries,
-				}
+	applicationEntries := make([]applicationEntry, len(applications))
+	wg := sync.WaitGroup{}
+	wg.Add(len(applications))
+
+	for i, application := range applications {
+		go func(i int, application string) {
+			serviceEntries, err := getServiceEntries(ctx, client, application)
+			applicationEntries[i] = applicationEntry{
+				err:            err,
+				application:    application,
+				serviceEntries: serviceEntries,
 			}
-		}(application)
+			wg.Done()
+		}(i, application)
 	}
 
-	applicationEntries := make([]applicationEntry, 0, len(applications))
-	for range applications {
-		entry := <-entriesChan
+	wg.Wait()
+
+	// check for errors
+	for _, entry := range applicationEntries {
 		if entry.err != nil {
 			return nil, entry.err
 		}
@@ -192,34 +199,35 @@ type serviceEntry struct {
 	err               error
 }
 
-func getServiceEntries(client *sfClient, application string) ([]serviceEntry, error) {
-	services, err := client.getServices(application)
+func getServiceEntries(ctx context.Context, client *sfClient, application string) ([]serviceEntry, error) {
+	services, err := client.getServices(ctx, application)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get services: %s", err)
 	}
 
-	entriesChan := make(chan serviceEntry, len(services))
-	for _, service := range services {
-		go func(service string) {
-			partitionEntries, err := getPartitionsEntries(client, application, service)
-			if err != nil {
-				entriesChan <- serviceEntry{err: err}
-			} else {
-				entriesChan <- serviceEntry{
-					service:           service,
-					partitionsEntries: partitionEntries,
-				}
+	serviceEntries := make([]serviceEntry, len(services))
+	wg := sync.WaitGroup{}
+	wg.Add(len(services))
+
+	for i, service := range services {
+		go func(i int, service string) {
+			partitionEntries, err := getPartitionsEntries(ctx, client, application, service)
+			serviceEntries[i] = serviceEntry{
+				err:               err,
+				service:           service,
+				partitionsEntries: partitionEntries,
 			}
-		}(service)
+			wg.Done()
+		}(i, service)
 	}
 
-	serviceEntries := make([]serviceEntry, 0, len(services))
-	for range services {
-		entry := <-entriesChan
+	wg.Wait()
+
+	// check for errors
+	for _, entry := range serviceEntries {
 		if entry.err != nil {
 			return nil, entry.err
 		}
-		serviceEntries = append(serviceEntries, entry)
 	}
 
 	return serviceEntries, nil
@@ -231,30 +239,32 @@ type partitionEntry struct {
 	err           error
 }
 
-func getPartitionsEntries(client *sfClient, application, service string) ([]partitionEntry, error) {
-	partitions, err := client.getPartitions(application, service)
+func getPartitionsEntries(ctx context.Context, client *sfClient, application, service string) ([]partitionEntry, error) {
+	partitions, err := client.getPartitions(ctx, application, service)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get partitions: %s", err)
 	}
 
-	entriesChan := make(chan partitionEntry, len(partitions))
-	for _, partition := range partitions {
-		go func(partition string) {
-			nodeEndpoints, err := client.getReplicaEndpoints(application, service, partition)
-			if err != nil {
-				entriesChan <- partitionEntry{err: err}
-			} else {
-				entriesChan <- partitionEntry{
-					partition:     partition,
-					nodeEndpoints: nodeEndpoints,
-				}
+	partitionEntries := make([]partitionEntry, len(partitions))
+	wg := sync.WaitGroup{}
+	wg.Add(len(partitions))
+
+	for i, partition := range partitions {
+		go func(i int, partition string) {
+			nodeEndpoints, err := client.getReplicaEndpoints(ctx, application, service, partition)
+			partitionEntries[i] = partitionEntry{
+				err:           err,
+				partition:     partition,
+				nodeEndpoints: nodeEndpoints,
 			}
-		}(partition)
+			wg.Done()
+		}(i, partition)
 	}
 
-	partitionEntries := make([]partitionEntry, 0, len(partitions))
-	for range partitions {
-		entry := <-entriesChan
+	wg.Wait()
+
+	// check for errors
+	for _, entry := range partitionEntries {
 		if entry.err != nil {
 			return nil, entry.err
 		}
@@ -266,7 +276,7 @@ func getPartitionsEntries(client *sfClient, application, service string) ([]part
 
 func (d *Discovery) makeTargets(applicationEntries []applicationEntry) []model.LabelSet {
 	// TODO - any clever way to pre-calculate the size of this slice?
-	targets := make([]model.LabelSet, 0)
+	var targets []model.LabelSet
 
 	for _, applicationEntry := range applicationEntries {
 		for _, serviceEntry := range applicationEntry.serviceEntries {
